@@ -1,4 +1,7 @@
 # Understanding BRIDGE_METER_USAGE_POINT
+# Understanding FACT_END_DEVICE_EVENT
+
+## How AMI Systems Generate Event Data
 
 ## The Problem It Solves
 
@@ -335,5 +338,451 @@ VALUES (5002, 'MTR_AAA', 'Retired', '2024-06-15', TRUE, ...);
 3. **Enables point-in-time queries** - Reconstruct any past state
 4. **Tracks business context** - Reasons, work orders, timestamps
 5. **Works with topology bridge** - Combined for full grid-aware analytics
+
+
+
+
+# FACT_END_DEVICE_EVENT - Data Sources and Event Type Catalog
+
+## How AMI Systems Generate Event Data
+
+### Understanding AMI Event Data Flow
+
+**AMI (Advanced Metering Infrastructure)** smart meters don't just send interval readings - they also send **event notifications** when specific conditions are detected. These events come from the same AMI Head-End System that collects meter readings.
+
+```
+Smart Meter (at customer site)
+    ├─► Interval Readings (every 15 min) ──► AMI Head-End ──► MDM ──► fact_interval_reading
+    └─► Event Notifications (real-time)  ──► AMI Head-End ──► MDM ──► fact_end_device_event
+```
+
+---
+
+## Where Event Data Comes From
+
+### Source 1: AMI Head-End System (Primary Source)
+**Examples**: Itron, Landis+Gyr, Honeywell, Sensus, Aclara, Silver Spring Networks
+
+**What It Sends**:
+- Automatic event messages when meters detect anomalies
+- Event codes defined by manufacturer
+- Timestamp of when event occurred
+- Severity level
+- Diagnostic payload (voltage snapshot, tamper details, etc.)
+
+**Delivery Methods**:
+1. **Push Notifications**: Meter immediately sends event to head-end (for critical events)
+2. **Periodic Polling**: Head-end queries meters for event logs every 15 min - 4 hours
+3. **Daily Batch**: Full event log downloaded once per day
+4. **Exception-Based**: Only abnormal events transmitted
+
+---
+
+### Source 2: Meter Data Management (MDM) System
+**Examples**: Oracle Utilities MDM, MDMS, eMeter, eMeter Suite
+
+**Role**:
+- Receives raw events from AMI Head-End
+- Validates and enriches event data
+- Applies business rules (e.g., "3 power outages in 1 hour = sustained outage")
+- Stores in staging tables
+- ETL process loads into data warehouse `fact_end_device_event`
+
+---
+
+### Source 3: Outage Management System (OMS) Integration
+**Examples**: Oracle OMS, Schneider Electric ADMS, GE DERMS
+
+**Role**:
+- Correlates meter events to create outage tickets
+- Provides confirmation/resolution timestamps
+- May generate synthetic "outage resolved" events
+- Feeds back status updates to the data warehouse
+
+---
+
+## Complete Event Type Catalog
+
+### Category 1: POWER QUALITY & OUTAGE EVENTS
+
+| Event Type Code | Event Name | Description | Severity | Typical Payload Data | Source |
+|-----------------|------------|-------------|----------|---------------------|--------|
+| `PWR_OUT_MOMENTARY` | Momentary Outage | Power loss < 5 minutes | Warning | Duration, voltage drop profile | Meter |
+| `PWR_OUT_SUSTAINED` | Sustained Outage | Power loss > 5 minutes | Critical | Outage start time, estimated duration | Meter |
+| `PWR_RESTORATION` | Power Restored | Power returned after outage | Info | Outage duration, voltage at restoration | Meter |
+| `VOLTAGE_SAG` | Voltage Sag | Voltage dropped 10-90% for 0.5-1 min | Warning | Min voltage, duration, phase affected | Meter |
+| `VOLTAGE_SWELL` | Voltage Swell | Voltage increased >110% nominal | Warning | Max voltage, duration, phase affected | Meter |
+| `OVER_VOLTAGE` | Over Voltage | Voltage >120% of nominal sustained | Critical | Voltage reading, duration, timestamp | Meter |
+| `UNDER_VOLTAGE` | Under Voltage | Voltage <85% of nominal sustained | Critical | Voltage reading, duration, timestamp | Meter |
+| `PHASE_LOSS` | Phase Loss | One or more phases lost (3-phase) | Critical | Phase identifier, voltage readings | Meter |
+| `PHASE_REVERSAL` | Phase Reversal | Phase sequence incorrect | Warning | Phase angles, connection type | Meter |
+| `FREQUENCY_DEVIATION` | Frequency Out of Spec | Frequency outside 59.5-60.5 Hz | Warning | Measured frequency, duration | Meter |
+| `VOLTAGE_IMBALANCE` | Voltage Imbalance | Phase voltages differ >2% | Warning | Per-phase voltages, imbalance % | Meter |
+| `HARMONIC_DISTORTION` | Harmonic Distortion | THD exceeds threshold | Info | THD %, harmonic spectrum | Meter |
+| `BLINK_EVENT` | Blink | Power interruption < 5 seconds | Info | Blink count, duration | Meter |
+
+---
+
+### Category 2: TAMPER & SECURITY EVENTS
+
+| Event Type Code | Event Name | Description | Severity | Typical Payload Data | Source |
+|-----------------|------------|-------------|----------|---------------------|--------|
+| `TAMPER_DETECT` | Tamper Detected | Physical tamper attempt detected | Critical | Tamper type code, timestamp | Meter |
+| `COVER_REMOVAL` | Meter Cover Removed | Cover/seal removed | Critical | Removal timestamp, seal number | Meter |
+| `COVER_REPLACED` | Meter Cover Replaced | Cover reattached | Info | Replacement timestamp | Meter |
+| `MAGNETIC_TAMPER` | Magnetic Interference | Strong magnetic field detected | Critical | Field strength, duration | Meter |
+| `INVERSION_TAMPER` | Meter Inversion | Meter installed upside down | Critical | Orientation angle | Meter |
+| `REVERSE_ENERGY_FLOW` | Reverse Energy Flow | Power flowing backward | Warning | kWh reversed, duration | Meter |
+| `BYPASS_DETECTED` | Meter Bypass | Current detected without voltage | Critical | Current reading, voltage reading | Meter |
+| `CASE_OPEN` | Meter Case Opened | Terminal block access | Critical | Open timestamp | Meter |
+| `SEAL_BROKEN` | Physical Seal Broken | Tamper seal broken | Critical | Seal ID, break timestamp | Meter |
+| `CT_RATIO_CHANGE` | CT Ratio Altered | Current transformer ratio modified | Critical | Old ratio, new ratio | Meter |
+
+---
+
+### Category 3: COMMUNICATION EVENTS
+
+| Event Type Code | Event Name | Description | Severity | Typical Payload Data | Source |
+|-----------------|------------|-------------|----------|---------------------|--------|
+| `COMM_LOSS` | Communication Loss | Meter stopped responding | Warning | Last successful ping, missed polls | Head-End |
+| `COMM_RESTORED` | Communication Restored | Meter back online | Info | Downtime duration, signal strength | Head-End |
+| `WEAK_SIGNAL` | Weak RF Signal | Signal strength below threshold | Warning | RSSI value, neighbor count | Meter |
+| `NETWORK_JOIN` | Network Join | Meter joined mesh network | Info | Network ID, parent node | Meter |
+| `NETWORK_LEAVE` | Network Leave | Meter left mesh network | Warning | Reason code, timestamp | Meter |
+| `REPEATER_FAILURE` | Repeater Down | Mesh repeater not functioning | Warning | Repeater ID, affected meters | Head-End |
+| `GATEWAY_FAILURE` | Gateway Down | Collection gateway offline | Critical | Gateway ID, meter count affected | Head-End |
+| `FIRMWARE_UPDATE_START` | Firmware Update Started | OTA update initiated | Info | Current version, target version | Head-End |
+| `FIRMWARE_UPDATE_SUCCESS` | Firmware Update Complete | OTA update successful | Info | New version, update duration | Meter |
+| `FIRMWARE_UPDATE_FAIL` | Firmware Update Failed | OTA update failed | Warning | Error code, rollback status | Meter |
+| `CONFIG_CHANGE` | Configuration Changed | Meter settings modified | Info | Changed parameters, source | Head-End |
+| `TIME_SYNC_FAIL` | Time Sync Failed | Clock synchronization error | Warning | Clock drift, sync source | Meter |
+
+---
+
+### Category 4: HARDWARE & DIAGNOSTIC EVENTS
+
+| Event Type Code | Event Name | Description | Severity | Typical Payload Data | Source |
+|-----------------|------------|-------------|----------|---------------------|--------|
+| `LOW_BATTERY` | Low Battery | Backup battery voltage low | Warning | Battery voltage, estimated life | Meter |
+| `BATTERY_CRITICAL` | Battery Critical | Battery needs immediate replacement | Critical | Battery voltage, days remaining | Meter |
+| `BATTERY_FAIL` | Battery Failed | Battery completely depleted | Critical | Failure timestamp | Meter |
+| `MEMORY_ERROR` | Memory Error | RAM/Flash error detected | Critical | Error type, affected module | Meter |
+| `SELF_TEST_FAIL` | Self-Test Failed | Diagnostic test failure | Critical | Failed test ID, error code | Meter |
+| `METROLOGY_ERROR` | Metrology Error | Measurement circuit fault | Critical | Error type, affected phases | Meter |
+| `DISPLAY_ERROR` | Display Malfunction | LCD/LED display fault | Warning | Error code | Meter |
+| `RTC_FAILURE` | Real-Time Clock Failure | Clock chip malfunction | Warning | Last known time | Meter |
+| `TEMPERATURE_HIGH` | High Temperature | Internal temp exceeds limit | Warning | Temperature reading, threshold | Meter |
+| `WATCHDOG_RESET` | Watchdog Reset | CPU watchdog triggered restart | Warning | Reset count, reset reason | Meter |
+| `POWER_ON` | Meter Powered On | Initial power-up or restart | Info | Power-on reason, firmware version | Meter |
+| `POWER_QUALITY_LOG_FULL` | PQ Log Buffer Full | Event buffer at capacity | Info | Oldest event timestamp | Meter |
+
+---
+
+### Category 5: LOAD & DEMAND EVENTS
+
+| Event Type Code | Event Name | Description | Severity | Typical Payload Data | Source |
+|-----------------|------------|-------------|----------|---------------------|--------|
+| `DEMAND_THRESHOLD` | Demand Threshold Exceeded | Peak demand exceeded limit | Warning | Peak kW, threshold, timestamp | Meter |
+| `DEMAND_RESET` | Demand Reset | Demand register manually reset | Info | Reset timestamp, reset source | Meter/Head-End |
+| `LOAD_PROFILE_FULL` | Load Profile Memory Full | Interval data buffer full | Warning | Oldest interval timestamp | Meter |
+| `TOU_RATE_CHANGE` | TOU Rate Schedule Change | Time-of-use schedule updated | Info | New schedule ID, effective date | Head-End |
+| `HIGH_CONSUMPTION` | Abnormal High Usage | Usage exceeds typical pattern | Warning | Usage kWh, baseline kWh, % increase | MDM |
+| `ZERO_CONSUMPTION` | Zero Usage Detected | No consumption for extended period | Warning | Duration, last reading date | MDM |
+| `NEGATIVE_CONSUMPTION` | Negative Usage | Cumulative reading decreased | Critical | Previous reading, current reading | Meter |
+
+---
+
+### Category 6: DISCONNECT SWITCH EVENTS (For AMI 2.0 Meters)
+
+| Event Type Code | Event Name | Description | Severity | Typical Payload Data | Source |
+|-----------------|------------|-------------|----------|---------------------|--------|
+| `REMOTE_DISCONNECT` | Remote Disconnect | Service disconnected remotely | Info | Disconnect reason, operator ID | Head-End |
+| `REMOTE_RECONNECT` | Remote Reconnect | Service reconnected remotely | Info | Reconnect reason, operator ID | Head-End |
+| `DISCONNECT_FAIL` | Disconnect Failed | Remote disconnect unsuccessful | Critical | Failure reason, retry count | Meter |
+| `RECONNECT_FAIL` | Reconnect Failed | Remote reconnect unsuccessful | Critical | Failure reason, retry count | Meter |
+| `UNAUTHORIZED_RECONNECT` | Unauthorized Reconnect | Service reconnected without command | Critical | Reconnection method | Meter |
+| `LOAD_SIDE_VOLTAGE` | Load Side Voltage Detected | Voltage on load side while disconnected | Critical | Voltage reading, duration | Meter |
+
+---
+
+### Category 7: METER READING EVENTS
+
+| Event Type Code | Event Name | Description | Severity | Typical Payload Data | Source |
+|-----------------|------------|-------------|----------|---------------------|--------|
+| `REGISTER_OVERFLOW` | Register Overflow | Cumulative register rolled over | Info | Rollover count, register type | Meter |
+| `NEGATIVE_REGISTER` | Negative Register Value | Register decremented unexpectedly | Critical | Register type, value change | Meter |
+| `DIAL_TEST_FAIL` | Dial Test Failed | Accuracy test outside tolerance | Critical | Error %, test date | Technician Tool |
+| `INTERVAL_DATA_OVERFLOW` | Interval Buffer Overflow | Too many intervals to transmit | Warning | Lost interval count | Meter |
+| `BILLING_READ_SUCCESS` | Billing Read Success | Monthly read completed | Info | Read timestamp, kWh total | Head-End |
+| `BILLING_READ_FAIL` | Billing Read Failed | Monthly read unsuccessful | Warning | Failure reason, retry scheduled | Head-End |
+
+---
+
+### Category 8: SPECIAL UTILITY EVENTS
+
+| Event Type Code | Event Name | Description | Severity | Typical Payload Data | Source |
+|-----------------|------------|-------------|----------|---------------------|--------|
+| `EMERGENCY_LOAD_CONTROL` | Emergency Load Control | DR event - load curtailed | Warning | Event ID, curtailment % | Utility System |
+| `PREPAY_LOW_BALANCE` | Prepay Low Balance | Prepaid credits running low | Warning | Remaining balance, days left | Meter |
+| `PREPAY_EXHAUSTED` | Prepay Balance Zero | Prepaid credits depleted | Critical | Disconnect pending timestamp | Meter |
+| `NET_METERING_EXPORT` | Net Metering Export | Solar/generation export detected | Info | Export kWh, timestamp | Meter |
+| `EV_CHARGING_DETECTED` | EV Charging Event | Electric vehicle charging signature | Info | Estimated charge duration, kW | Meter |
+
+---
+
+## Sample Event Data Payload Examples
+
+### Example 1: Power Outage Event
+```json
+{
+  "event_id": "EVT_2024_12345",
+  "meter_id": "MTR_AAA_5678",
+  "event_type_code": "PWR_OUT_SUSTAINED",
+  "event_timestamp": "2024-10-27T14:32:18Z",
+  "severity_level": "Critical",
+  "payload_data": {
+    "outage_start": "2024-10-27T14:32:18Z",
+    "voltage_before_outage": 120.3,
+    "voltage_at_outage": 0.0,
+    "phase_affected": "ABC",
+    "estimated_duration_minutes": null,
+    "outage_cause_code": "Unknown",
+    "transformer_id": "XFMR_1234",
+    "feeder_id": "FDR_EAST_05"
+  }
+}
+```
+
+### Example 2: Tamper Event
+```json
+{
+  "event_id": "EVT_2024_67890",
+  "meter_id": "MTR_BBB_9012",
+  "event_type_code": "MAGNETIC_TAMPER",
+  "event_timestamp": "2024-10-28T09:15:42Z",
+  "severity_level": "Critical",
+  "payload_data": {
+    "tamper_type": "Magnetic Interference",
+    "field_strength_gauss": 450,
+    "duration_seconds": 120,
+    "meter_serial": "SN-99887-B",
+    "seal_status": "Intact",
+    "voltage_during_tamper": 121.5,
+    "current_during_tamper": 0.0,
+    "investigator_assigned": "INV_4567"
+  }
+}
+```
+
+### Example 3: Communication Loss
+```json
+{
+  "event_id": "EVT_2024_11223",
+  "meter_id": "MTR_CCC_3456",
+  "event_type_code": "COMM_LOSS",
+  "event_timestamp": "2024-10-29T18:22:00Z",
+  "severity_level": "Warning",
+  "payload_data": {
+    "last_successful_ping": "2024-10-29T12:00:00Z",
+    "missed_poll_count": 12,
+    "downtime_hours": 6.37,
+    "signal_strength_before_loss": -72,
+    "neighbor_meter_count": 4,
+    "parent_repeater_id": "RPT_5678",
+    "parent_repeater_status": "Online",
+    "probable_cause": "Meter Power Loss"
+  }
+}
+```
+
+---
+
+## How Events Flow into fact_end_device_event
+
+### ETL Process Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 1: AMI HEAD-END SYSTEM                                     │
+│ - Meter sends event notification                                │
+│ - Head-End logs event with timestamp, meter ID, event code      │
+│ - Stored in Head-End database (Oracle, SQL Server, etc.)        │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 2: MDM SYSTEM (Meter Data Management)                      │
+│ - Polls Head-End every 15 minutes for new events                │
+│ - Validates event data (meter exists, timestamp valid)          │
+│ - Enriches with customer/location data                          │
+│ - Stores in MDM staging tables                                  │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 3: ETL PROCESS (Extract-Transform-Load)                    │
+│ - Runs every 15-60 minutes                                      │
+│ - Extracts new events from MDM staging                          │
+│ - Transforms:                                                    │
+│   * Lookup meter_sk from dim_meter                              │
+│   * Lookup topology_bridge_sk (point-in-time)                   │
+│   * Lookup event_type_sk from dim_event_type                    │
+│   * Create time_sk from event_timestamp                         │
+│   * Parse JSON payload into payload_data field                  │
+│ - Loads into fact_end_device_event                              │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 4: DATA WAREHOUSE                                          │
+│ - fact_end_device_event populated                               │
+│ - Available for analytics, dashboards, outage maps              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Sample ETL SQL (Simplified)
+
+```sql
+-- ETL Job: Load Events from MDM to Data Warehouse
+-- Runs every 15 minutes
+
+INSERT INTO fact_end_device_event (
+    event_sk,
+    event_id,
+    meter_sk,
+    time_sk,
+    event_type_sk,
+    topology_bridge_sk,
+    service_location_sk,
+    event_type_code,
+    severity_level,
+    event_status,
+    payload_data,
+    event_timestamp,
+    etl_batch_id
+)
+SELECT 
+    -- Generate surrogate key
+    NEXTVAL('event_sk_seq') as event_sk,
+    
+    -- Natural key from MDM
+    stg.event_id,
+    
+    -- Lookup dimension keys
+    dm.meter_sk,
+    dt.time_sk,
+    det.event_type_sk,
+    
+    -- Point-in-time topology lookup (CRITICAL!)
+    btc.topology_bridge_sk,
+    btc.service_location_sk,
+    
+    -- Event attributes
+    stg.event_type_code,
+    stg.severity_level,
+    'Open' as event_status,  -- Initial status
+    stg.payload_data::JSON,
+    stg.event_timestamp,
+    
+    -- ETL tracking
+    :batch_id as etl_batch_id
+
+FROM mdm_staging.events stg
+
+-- Join to meter dimension (current record)
+INNER JOIN dim_meter dm 
+    ON stg.meter_id = dm.meter_id 
+    AND dm.is_current = TRUE
+
+-- Join to time dimension
+INNER JOIN dim_time dt 
+    ON DATE_TRUNC('hour', stg.event_timestamp) = dt.timestamp_utc
+
+-- Join to event type dimension
+INNER JOIN dim_event_type det 
+    ON stg.event_type_code = det.event_type_code
+
+-- CRITICAL: Point-in-time topology join
+INNER JOIN bridge_topology_connectivity btc
+    ON dm.meter_id = btc.meter_id
+    AND stg.event_timestamp >= btc.valid_from
+    AND stg.event_timestamp < btc.valid_to
+    AND btc.is_current = TRUE
+
+-- Only load new events
+WHERE stg.event_timestamp > (
+    SELECT COALESCE(MAX(event_timestamp), '1900-01-01') 
+    FROM fact_end_device_event
+)
+AND stg.processed_flag = FALSE;
+
+-- Mark events as processed
+UPDATE mdm_staging.events
+SET processed_flag = TRUE,
+    processed_timestamp = CURRENT_TIMESTAMP
+WHERE processed_flag = FALSE;
+```
+
+---
+
+## Common Use Cases
+
+### Use Case 1: Outage Detection Dashboard
+```sql
+-- Active outages right now
+SELECT 
+    btc.feeder_id,
+    btc.transformer_id,
+    COUNT(DISTINCT f.meter_sk) as affected_meters,
+    MIN(f.event_timestamp) as first_outage,
+    MAX(f.event_timestamp) as last_outage,
+    ROUND(AVG(EXTRACT(EPOCH FROM (NOW() - f.event_timestamp))/60), 1) as avg_minutes_out
+FROM fact_end_device_event f
+INNER JOIN bridge_topology_connectivity btc ON f.topology_bridge_sk = btc.topology_bridge_sk
+INNER JOIN dim_event_type det ON f.event_type_sk = det.event_type_sk
+WHERE det.event_category = 'Outage'
+  AND f.event_status = 'Open'
+  AND f.event_timestamp >= NOW() - INTERVAL '4 HOURS'
+GROUP BY btc.feeder_id, btc.transformer_id
+HAVING COUNT(DISTINCT f.meter_sk) >= 3  -- Cluster threshold
+ORDER BY affected_meters DESC;
+```
+
+### Use Case 2: Tamper Investigation
+```sql
+-- All tamper events in last 30 days
+SELECT 
+    f.event_id,
+    dm.meter_id,
+    dm.asset_tag_number,
+    dsl.address_line_1,
+    dsl.city,
+    f.event_type_code,
+    f.event_timestamp,
+    f.payload_data->>'tamper_type' as tamper_type,
+    f.event_status
+FROM fact_end_device_event f
+INNER JOIN dim_meter dm ON f.meter_sk = dm.meter_sk AND dm.is_current = TRUE
+INNER JOIN dim_service_location dsl ON f.service_location_sk = dsl.service_location_sk
+INNER JOIN dim_event_type det ON f.event_type_sk = det.event_type_sk
+WHERE det.event_category = 'Tamper'
+  AND f.event_timestamp >= NOW() - INTERVAL '30 DAYS'
+ORDER BY f.event_timestamp DESC;
+```
+
+---
+
+## Summary
+
+**Q: How does fact_end_device_event get data if all you get is AMI data?**
+
+**A**: AMI systems send TWO types of data:
+1. **Interval Readings** → `fact_interval_reading`
+2. **Event Notifications** → `fact_end_device_event`
+
+Both come from the same smart meters, transmitted through the same AMI Head-End system, but serve different analytical purposes. Events are critical for operations (outage management, tamper detection, asset health), while readings are for billing and load analysis.
+
+**Event Volume**: Typical utility might see:
+- Interval readings: 50 million/day
+- Events: 100,000-500,000/day (depending on network health)
 
 **Real-World Impact**: Without this bridge, you couldn't answer basic operational questions like "How much energy did this house consume last year?" when the meter was swapped mid-year.
