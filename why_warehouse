@@ -1,0 +1,14 @@
+A warehouse allows you to correlate 2 years of AMI voltage data with asset health records.
+Value: You can identify a transformer that is slowly failing due to consistent overloading before it causes an outage. Real-time systems will only tell you when it’s already dead.
+
+
+The vendor system only knows what the meter says. It doesn't know about the weather, the age of the conductor, or which customers have Electric Vehicles (EVs).
+* The Gap: Meter vendors don't store high-resolution GIS data, SCADA history, or weather patterns in a way that’s queryable.
+* Value: By mashing AMI 2.0 data with GIS and SCADA in a warehouse, you can perform Phase Detection and Transformer Load Management. You can see exactly which phase of a feeder is imbalanced without sending a truck to the field
+
+A warehouse (specifically a Lakehouse or Cloud Warehouse) handles this high-volume telemetry easily. Storing 15-minute or 1-second interval data for 500,000 meters in an operational vendor database will eventually degrade its performance. This allows for Load Disaggregation—using AI in the warehouse to "see" inside the house and identify which customers have failing HVAC units or un-enrolled solar panels.
+
+
+Managing the "EV & DER" Tidal Wave. With the rise of Distributed Energy Resources (DERs) like rooftop solar and EVs, the grid is becoming bi-directional.
+* The Gap: Vendor systems are often "one-way" thinkers (Power Out -> Bill In).
+* Value: A warehouse allows for hosting capacity analysis. It tells the engineering team exactly where the grid can handle another 50 EV chargers based on historical loading patterns, preventing expensive and unnecessary transformer upgrades.
